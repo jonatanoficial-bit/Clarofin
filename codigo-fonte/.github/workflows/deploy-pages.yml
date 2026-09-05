@@ -49,7 +49,7 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Gerar site estático
-        run: pnpm build
+        run: pnpm build:github
 
       - name: Preparar GitHub Pages
         uses: actions/configure-pages@v5
