@@ -18,7 +18,11 @@ if (basePath) {
       await rm(path.join(outputDirectory, basePath), { recursive: true, force: true });
     }
   } catch {
-    throw new Error(`Os arquivos gerados para /${basePath}/_next não foram encontrados.`);
+    try {
+      if (!(await stat(publishedAssets)).isDirectory()) throw new Error();
+    } catch {
+      throw new Error(`Os arquivos gerados para /${basePath}/_next não foram encontrados.`);
+    }
   }
 }
 

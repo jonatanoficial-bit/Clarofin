@@ -1,4 +1,4 @@
-# Clarofin — Parte 2
+# Clarofin — Parte 3
 
 Plataforma de administração financeira pessoal com visual de aplicativo, linguagem clara e foco em adolescentes, adultos e idosos.
 
@@ -16,12 +16,21 @@ Plataforma de administração financeira pessoal com visual de aplicativo, lingu
 - salvamento principal em IndexedDB e segunda cópia automática no navegador;
 - exportação e restauração de backup em arquivo JSON;
 - navegação responsiva para computador e celular.
+- navegação lateral funcional em todas as áreas;
+- histórico completo de lançamentos com busca, filtro e exclusão;
+- cadastro de contas, cartões e contas a pagar;
+- metas financeiras com progresso e novos aportes;
+- orçamento mensal por categoria;
+- relatório anual mês a mês e exportação CSV;
+- início limpo, sem valores financeiros demonstrativos.
 
 ## Segurança dos dados nesta etapa
 
 Os dados ficam somente no aparelho do usuário. O IndexedDB mantém a cópia principal e o armazenamento local mantém uma segunda cópia de recuperação quando há espaço disponível. O usuário também pode baixar um arquivo de backup.
 
 Limpar os dados do navegador ou perder o aparelho ainda pode apagar as cópias locais. Por isso, o painel recomenda backups periódicos. A próxima evolução planejada é login com sincronização segura, podendo usar Firebase Authentication e Firestore.
+
+Ao abrir a Parte 3 pela primeira vez, registros de demonstração das versões anteriores são removidos automaticamente. Lançamentos criados pelo usuário são preservados.
 
 ## Rodar localmente
 

@@ -20,58 +20,59 @@ export type FinanceAlert = {
   paid: boolean;
 };
 
+export type FinanceAccount = {
+  id: string;
+  name: string;
+  kind: 'checking' | 'savings' | 'cash' | 'credit';
+  balance: number;
+};
+
+export type FinanceGoal = {
+  id: string;
+  title: string;
+  targetAmount: number;
+  currentAmount: number;
+  deadline: string;
+};
+
+export type FinanceBudget = {
+  category: string;
+  limit: number;
+};
+
 export type FinanceState = {
+  version: 3;
+  transactions: FinanceTransaction[];
+  alerts: FinanceAlert[];
+  accounts: FinanceAccount[];
+  goals: FinanceGoal[];
+  budgets: FinanceBudget[];
+  updatedAt: string;
+};
+
+type LegacyFinanceState = {
   version: 2;
   transactions: FinanceTransaction[];
   alerts: FinanceAlert[];
   updatedAt: string;
 };
 
+type StoredFinanceState = FinanceState | LegacyFinanceState;
+
 const DB_NAME = 'clarofin-local';
 const STORE_NAME = 'finance';
 const STATE_KEY = 'primary-state';
-const BACKUP_KEY = 'clarofin-backup-v2';
-
-const sampleTransactions: FinanceTransaction[] = [
-  ['salario-set', 'Salário', 6850, 'income', 'Receitas', '2026-09-02'],
-  ['aluguel-set', 'Aluguel', 1540, 'expense', 'Moradia', '2026-09-02'],
-  ['mercado-set', 'Supermercado Aurora', 486.4, 'expense', 'Alimentação', '2026-09-04'],
-  ['transporte-set', 'Mobilidade', 242.8, 'expense', 'Transporte', '2026-09-01'],
-  ['energia-set', 'Energia elétrica', 214.9, 'expense', 'Moradia', '2026-09-03'],
-  ['lazer-set', 'Cinema e lazer', 168, 'expense', 'Lazer', '2026-09-03'],
-  ['saude-set', 'Farmácia', 137.5, 'expense', 'Saúde', '2026-09-04'],
-  ['salario-ago', 'Salário', 6520, 'income', 'Receitas', '2026-08-02'],
-  ['aluguel-ago', 'Aluguel', 1540, 'expense', 'Moradia', '2026-08-02'],
-  ['mercado-ago', 'Compras do mês', 1280, 'expense', 'Alimentação', '2026-08-12'],
-  ['transporte-ago', 'Transporte', 620, 'expense', 'Transporte', '2026-08-18'],
-  ['contas-ago', 'Contas da casa', 740, 'expense', 'Moradia', '2026-08-24'],
-  ['salario-jul', 'Salário', 6350, 'income', 'Receitas', '2026-07-02'],
-  ['gastos-jul-1', 'Moradia', 2180, 'expense', 'Moradia', '2026-07-08'],
-  ['gastos-jul-2', 'Alimentação', 1140, 'expense', 'Alimentação', '2026-07-19'],
-  ['salario-jun', 'Salário', 6350, 'income', 'Receitas', '2026-06-02'],
-  ['gastos-jun', 'Despesas do mês', 4210, 'expense', 'Outros', '2026-06-21'],
-  ['receita-2025', 'Receitas de 2025', 72800, 'income', 'Receitas', '2025-12-30'],
-  ['despesa-2025', 'Despesas de 2025', 54800, 'expense', 'Outros', '2025-12-30'],
-  ['receita-2024', 'Receitas de 2024', 66400, 'income', 'Receitas', '2024-12-30'],
-  ['despesa-2024', 'Despesas de 2024', 53100, 'expense', 'Outros', '2024-12-30'],
-].map(([id, description, amount, type, category, date]) => ({
-  id: String(id),
-  description: String(description),
-  amount: Number(amount),
-  type: type as TransactionType,
-  category: String(category),
-  date: String(date),
-  createdAt: `${date}T12:00:00.000Z`,
-  source: 'sample' as const,
-}));
+const BACKUP_KEY = 'clarofin-backup-v3';
+const LEGACY_BACKUP_KEY = 'clarofin-backup-v2';
+const DEMO_ALERT_IDS = new Set(['energia', 'internet']);
 
 export const initialFinanceState: FinanceState = {
-  version: 2,
-  transactions: sampleTransactions,
-  alerts: [
-    { id: 'energia', title: 'Energia elétrica', dueDate: '2026-09-03', amount: 214.9, paid: false },
-    { id: 'internet', title: 'Internet residencial', dueDate: '2026-09-07', amount: 119.9, paid: false },
-  ],
+  version: 3,
+  transactions: [],
+  alerts: [],
+  accounts: [],
+  goals: [],
+  budgets: [],
   updatedAt: new Date().toISOString(),
 };
 
@@ -86,10 +87,22 @@ function openDatabase(): Promise<IDBDatabase> {
   });
 }
 
-function isFinanceState(value: unknown): value is FinanceState {
+function isFinanceState(value: unknown): value is StoredFinanceState {
   if (!value || typeof value !== 'object') return false;
-  const state = value as Partial<FinanceState>;
-  return state.version === 2 && Array.isArray(state.transactions) && Array.isArray(state.alerts);
+  const state = value as { version?: number; transactions?: unknown; alerts?: unknown };
+  return (state.version === 2 || state.version === 3) && Array.isArray(state.transactions) && Array.isArray(state.alerts);
+}
+
+function normalizeFinanceState(value: StoredFinanceState): FinanceState {
+  return {
+    version: 3,
+    transactions: value.transactions.filter((item) => item.source !== 'sample'),
+    alerts: value.alerts.filter((item) => !DEMO_ALERT_IDS.has(item.id)),
+    accounts: 'accounts' in value && Array.isArray(value.accounts) ? value.accounts : [],
+    goals: 'goals' in value && Array.isArray(value.goals) ? value.goals : [],
+    budgets: 'budgets' in value && Array.isArray(value.budgets) ? value.budgets : [],
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 async function readIndexedState(): Promise<FinanceState | null> {
@@ -97,7 +110,7 @@ async function readIndexedState(): Promise<FinanceState | null> {
   return new Promise((resolve, reject) => {
     const transaction = database.transaction(STORE_NAME, 'readonly');
     const request = transaction.objectStore(STORE_NAME).get(STATE_KEY);
-    request.onsuccess = () => resolve(isFinanceState(request.result) ? request.result : null);
+    request.onsuccess = () => resolve(isFinanceState(request.result) ? normalizeFinanceState(request.result) : null);
     request.onerror = () => reject(request.error);
     transaction.oncomplete = () => database.close();
   });
@@ -121,13 +134,15 @@ export async function loadFinanceState(): Promise<{ state: FinanceState; recover
     // The local backup below is the recovery path when IndexedDB is unavailable.
   }
 
-  const backup = localStorage.getItem(BACKUP_KEY);
+  const backup = localStorage.getItem(BACKUP_KEY) || localStorage.getItem(LEGACY_BACKUP_KEY);
   if (backup) {
     try {
       const parsed: unknown = JSON.parse(backup);
       if (isFinanceState(parsed)) {
-        await writeIndexedState(parsed).catch(() => undefined);
-        return { state: parsed, recovered: true };
+        const normalized = normalizeFinanceState(parsed);
+        await saveFinanceState(normalized).catch(() => undefined);
+        localStorage.removeItem(LEGACY_BACKUP_KEY);
+        return { state: normalized, recovered: true };
       }
     } catch {
       localStorage.removeItem(BACKUP_KEY);
@@ -151,7 +166,6 @@ export async function loadFinanceState(): Promise<{ state: FinanceState; recover
             createdAt: new Date().toISOString(),
             source: 'manual' as const,
           })),
-          ...initialFinanceState.transactions,
         ],
         updatedAt: new Date().toISOString(),
       };
@@ -185,5 +199,5 @@ export function serializeFinanceState(state: FinanceState): string {
 export function parseFinanceBackup(text: string): FinanceState {
   const parsed: unknown = JSON.parse(text);
   if (!isFinanceState(parsed)) throw new Error('Este arquivo não é um backup válido do Clarofin.');
-  return { ...parsed, updatedAt: new Date().toISOString() };
+  return normalizeFinanceState(parsed);
 }
