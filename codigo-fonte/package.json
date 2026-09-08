@@ -10,6 +10,7 @@
     "build": "vinext build",
     "build:github": "vinext build && node scripts/prepare-github-pages.mjs",
     "start": "wrangler dev --config dist/server/wrangler.json",
+    "verify:finance": "node --experimental-strip-types scripts/verify-calculations.ts",
     "lint": "oxlint",
     "format": "oxfmt"
   },

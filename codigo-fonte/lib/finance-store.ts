@@ -10,6 +10,10 @@ export type FinanceTransaction = {
   createdAt: string;
   source: 'manual' | 'photo' | 'sample';
   receiptDataUrl?: string;
+  status: 'paid' | 'planned';
+  recurrenceGroupId?: string;
+  recurrenceIndex?: number;
+  recurrenceTotal?: number;
 };
 
 export type FinanceAlert = {
@@ -41,7 +45,7 @@ export type FinanceBudget = {
 };
 
 export type FinanceState = {
-  version: 3;
+  version: 4;
   transactions: FinanceTransaction[];
   alerts: FinanceAlert[];
   accounts: FinanceAccount[];
@@ -51,9 +55,12 @@ export type FinanceState = {
 };
 
 type LegacyFinanceState = {
-  version: 2;
-  transactions: FinanceTransaction[];
+  version: 2 | 3;
+  transactions: Array<Omit<FinanceTransaction, 'status'> & { status?: 'paid' | 'planned' }>;
   alerts: FinanceAlert[];
+  accounts?: FinanceAccount[];
+  goals?: FinanceGoal[];
+  budgets?: FinanceBudget[];
   updatedAt: string;
 };
 
@@ -62,12 +69,12 @@ type StoredFinanceState = FinanceState | LegacyFinanceState;
 const DB_NAME = 'clarofin-local';
 const STORE_NAME = 'finance';
 const STATE_KEY = 'primary-state';
-const BACKUP_KEY = 'clarofin-backup-v3';
-const LEGACY_BACKUP_KEY = 'clarofin-backup-v2';
+const BACKUP_KEY = 'clarofin-backup-v4';
+const LEGACY_BACKUP_KEYS = ['clarofin-backup-v3', 'clarofin-backup-v2'];
 const DEMO_ALERT_IDS = new Set(['energia', 'internet']);
 
 export const initialFinanceState: FinanceState = {
-  version: 3,
+  version: 4,
   transactions: [],
   alerts: [],
   accounts: [],
@@ -90,17 +97,21 @@ function openDatabase(): Promise<IDBDatabase> {
 function isFinanceState(value: unknown): value is StoredFinanceState {
   if (!value || typeof value !== 'object') return false;
   const state = value as { version?: number; transactions?: unknown; alerts?: unknown };
-  return (state.version === 2 || state.version === 3) && Array.isArray(state.transactions) && Array.isArray(state.alerts);
+  return (state.version === 2 || state.version === 3 || state.version === 4) && Array.isArray(state.transactions) && Array.isArray(state.alerts);
 }
 
 function normalizeFinanceState(value: StoredFinanceState): FinanceState {
+  const today = new Date().toISOString().slice(0, 10);
   return {
-    version: 3,
-    transactions: value.transactions.filter((item) => item.source !== 'sample'),
+    version: 4,
+    transactions: value.transactions.filter((item) => item.source !== 'sample').map((item) => ({
+      ...item,
+      status: item.status || (item.type === 'expense' && item.date > today ? 'planned' : 'paid'),
+    })),
     alerts: value.alerts.filter((item) => !DEMO_ALERT_IDS.has(item.id)),
-    accounts: 'accounts' in value && Array.isArray(value.accounts) ? value.accounts : [],
-    goals: 'goals' in value && Array.isArray(value.goals) ? value.goals : [],
-    budgets: 'budgets' in value && Array.isArray(value.budgets) ? value.budgets : [],
+    accounts: Array.isArray(value.accounts) ? value.accounts : [],
+    goals: Array.isArray(value.goals) ? value.goals : [],
+    budgets: Array.isArray(value.budgets) ? value.budgets : [],
     updatedAt: new Date().toISOString(),
   };
 }
@@ -134,14 +145,14 @@ export async function loadFinanceState(): Promise<{ state: FinanceState; recover
     // The local backup below is the recovery path when IndexedDB is unavailable.
   }
 
-  const backup = localStorage.getItem(BACKUP_KEY) || localStorage.getItem(LEGACY_BACKUP_KEY);
+  const backup = localStorage.getItem(BACKUP_KEY) || LEGACY_BACKUP_KEYS.map((key) => localStorage.getItem(key)).find(Boolean);
   if (backup) {
     try {
       const parsed: unknown = JSON.parse(backup);
       if (isFinanceState(parsed)) {
         const normalized = normalizeFinanceState(parsed);
         await saveFinanceState(normalized).catch(() => undefined);
-        localStorage.removeItem(LEGACY_BACKUP_KEY);
+        LEGACY_BACKUP_KEYS.forEach((key) => localStorage.removeItem(key));
         return { state: normalized, recovered: true };
       }
     } catch {
@@ -165,6 +176,7 @@ export async function loadFinanceState(): Promise<{ state: FinanceState; recover
             date: '2026-09-04',
             createdAt: new Date().toISOString(),
             source: 'manual' as const,
+            status: 'paid' as const,
           })),
         ],
         updatedAt: new Date().toISOString(),

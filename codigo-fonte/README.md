@@ -1,4 +1,4 @@
-# Clarofin — Parte 3
+# Clarofin — Parte 4
 
 Plataforma de administração financeira pessoal com visual de aplicativo, linguagem clara e foco em adolescentes, adultos e idosos.
 
@@ -6,10 +6,14 @@ Plataforma de administração financeira pessoal com visual de aplicativo, lingu
 
 - controle mês a mês com navegação pelo calendário;
 - análises diárias, mensais e anuais;
-- gráficos de linha, barras e distribuição por áreas;
+- gráficos de linha, barras e distribuição detalhada por categorias;
+- separação visual entre despesas pagas, despesas a vencer e saldo projetado;
 - identificação automática da área com maior gasto;
-- resumo de receitas, despesas, saldo e média livre diária;
-- alertas de contas pendentes com ação **Paguei**;
+- 15 categorias de despesas, incluindo consumo, alimentação, transporte, lazer, assinaturas e telefonia;
+- 12 origens de entrada, incluindo salário CLT, freelancer, doação e presente;
+- alertas automáticos: toda despesa com data futura entra em **Contas a vencer**;
+- ação **Paguei** que atualiza o lançamento e todos os cálculos;
+- despesas recorrentes mensais configuráveis de 2 a 60 meses;
 - lançamento de receita ou despesa, com categoria e data;
 - foto do comprovante pela câmera do celular, reduzida e salva junto ao lançamento;
 - orientadora virtual Lia com explicações sérias e objetivas;
@@ -18,7 +22,7 @@ Plataforma de administração financeira pessoal com visual de aplicativo, lingu
 - navegação responsiva para computador e celular.
 - navegação lateral funcional em todas as áreas;
 - histórico completo de lançamentos com busca, filtro e exclusão;
-- cadastro de contas, cartões e contas a pagar;
+- cadastro de contas e cartões;
 - metas financeiras com progresso e novos aportes;
 - orçamento mensal por categoria;
 - relatório anual mês a mês e exportação CSV;
@@ -30,7 +34,7 @@ Os dados ficam somente no aparelho do usuário. O IndexedDB mantém a cópia pri
 
 Limpar os dados do navegador ou perder o aparelho ainda pode apagar as cópias locais. Por isso, o painel recomenda backups periódicos. A próxima evolução planejada é login com sincronização segura, podendo usar Firebase Authentication e Firestore.
 
-Ao abrir a Parte 3 pela primeira vez, registros de demonstração das versões anteriores são removidos automaticamente. Lançamentos criados pelo usuário são preservados.
+Ao abrir a Parte 4 pela primeira vez, os dados reais das versões anteriores são migrados e preservados. Despesas futuras antigas também passam a ser reconhecidas automaticamente como contas a vencer.
 
 ## Rodar localmente
 
@@ -71,7 +75,6 @@ O projeto inclui `.github/workflows/deploy-pages.yml`. Nas configurações do re
 ## Próximas etapas
 
 1. login e sincronização em nuvem com Firebase;
-2. cadastro completo de contas recorrentes e cartões;
-3. OCR/IA para extrair valor, data e estabelecimento da foto;
-4. metas e orçamento por categoria;
-5. notificações no celular e recursos premium.
+2. OCR/IA para extrair valor, data e estabelecimento da foto;
+3. notificações no celular e recursos premium;
+4. edição em lote de séries recorrentes.
