@@ -2,15 +2,17 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { AlertCircle, ArrowDownLeft, ArrowRight, ArrowUpRight, Bell, CalendarDays, Camera, Check, ChevronLeft, ChevronRight, CircleDollarSign, CreditCard, Database, Download, Eye, EyeOff, FileText, Home, LayoutGrid, Lightbulb, Menu, MoreHorizontal, Plus, ReceiptText, RefreshCcw, Search, Settings, ShieldCheck, Sparkles, Target, Trash2, TrendingUp, Upload, WalletCards, X } from 'lucide-react';
+import { AlertCircle, ArrowDownLeft, ArrowRight, ArrowUpRight, Bell, CalendarDays, Camera, Check, ChevronLeft, ChevronRight, CircleDollarSign, CreditCard, Database, Download, Eye, EyeOff, FileText, Home, LayoutGrid, Lightbulb, LogOut, Menu, MoreHorizontal, Plus, ReceiptText, RefreshCcw, Search, Settings, ShieldCheck, Sparkles, Target, Trash2, TrendingUp, Upload, WalletCards, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Progress } from '@/components/ui/progress';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { calculateTotals as totals, shiftRecurringDate as shiftTransactionDate } from '@/lib/finance-calculations';
-import { FinanceState, FinanceTransaction, initialFinanceState, loadFinanceState, parseFinanceBackup, saveFinanceState, serializeFinanceState, TransactionType } from '@/lib/finance-store';
+import AuthGate, { useClarofinAuth } from '@/components/auth-gate';
+import { CloudConflictError, loadCloudFinanceState, saveCloudFinanceState, watchCloudFinanceState } from '@/lib/cloud-finance-store';
+import { calculateCarryOver, calculateTotals as totals, shiftRecurringDate as shiftTransactionDate } from '@/lib/finance-calculations';
+import { claimAndSaveLegacyState, FinanceState, FinanceTransaction, hasFinanceData, initialFinanceState, loadFinanceState, parseFinanceBackup, protectLegacyDataForUser, saveFinanceState, serializeFinanceState, TransactionType } from '@/lib/finance-store';
 
 type AnalysisMode = 'daily' | 'monthly' | 'annual';
 type ChartMode = 'area' | 'bar';
@@ -62,6 +64,11 @@ function transactionIcon(item: FinanceTransaction) {
 }
 
 export default function HomePage() {
+  return <AuthGate><FinanceWorkspace /></AuthGate>;
+}
+
+function FinanceWorkspace() {
+  const { user, signOut, deleteAccount } = useClarofinAuth();
   const [finance, setFinance] = useState<FinanceState>(initialFinanceState);
   const [activeView, setActiveView] = useState<AppView>('dashboard');
   const [hydrated, setHydrated] = useState(false);
@@ -88,30 +95,65 @@ export default function HomePage() {
   const [formStatus, setFormStatus] = useState('');
   const [transactionSearch, setTransactionSearch] = useState('');
   const [transactionFilter, setTransactionFilter] = useState<'all' | TransactionType>('all');
+  const [legacyImportAvailable, setLegacyImportAvailable] = useState(false);
+  const revisionRef = useRef<number | null>(null);
   const backupInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const rememberedMonth = localStorage.getItem('clarofin-selected-month');
-    setSelectedMonth(rememberedMonth || new Date().toISOString().slice(0, 7));
-    loadFinanceState().then(({ state, recovered }) => {
-      setFinance(state);
-      setHydrated(true);
-      setStorageStatus(recovered ? 'Dados recuperados da cópia local' : 'Dados protegidos neste aparelho');
-    }).catch(() => {
-      setHydrated(true);
-      setStorageStatus('Não foi possível confirmar a proteção local');
-    });
-  }, []);
+    let active = true;
+    const initialize = async () => {
+      const rememberedMonth = localStorage.getItem(`clarofin-selected-month:${user.id}`);
+      if (active) setSelectedMonth(rememberedMonth || new Date().toISOString().slice(0, 7));
+      try {
+        const local = await loadFinanceState(user.id);
+        const cloud = await loadCloudFinanceState(user.id);
+        if (!active) return;
+        if (cloud) {
+          revisionRef.current = cloud.revision;
+          setFinance(cloud.state);
+          await saveFinanceState(user.id, cloud.state);
+          setStorageStatus('Sincronizado na nuvem com segurança');
+        } else if (local.legacyAvailable && hasFinanceData(local.state)) {
+          setFinance(local.state);
+          setLegacyImportAvailable(true);
+          setStorageStatus('Encontramos dados locais. Confirme antes de associá-los à sua conta.');
+        } else {
+          const created = await saveCloudFinanceState(user.id, local.state, null);
+          revisionRef.current = created.revision;
+          setFinance(created.state);
+          await saveFinanceState(user.id, created.state);
+          setStorageStatus(local.blockedForPrivacy ? 'Nova área privada criada neste dispositivo' : 'Sua área privada foi sincronizada na nuvem');
+        }
+      } catch {
+        if (active) setStorageStatus('Modo local ativo. A sincronização será retomada quando a conexão voltar.');
+      } finally { if (active) setHydrated(true); }
+    };
+    void initialize();
+    return () => { active = false; };
+  }, [user.id]);
 
   useEffect(() => {
-    if (hydrated) localStorage.setItem('clarofin-selected-month', selectedMonth);
-  }, [hydrated, selectedMonth]);
+    if (hydrated) localStorage.setItem(`clarofin-selected-month:${user.id}`, selectedMonth);
+  }, [hydrated, selectedMonth, user.id]);
 
   const persist = (next: FinanceState) => {
     const state = { ...next, updatedAt: new Date().toISOString() };
     setFinance(state);
-    setStorageStatus('Salvando em duas cópias…');
-    saveFinanceState(state).then(({ backupSaved }) => setStorageStatus(backupSaved ? 'Salvo automaticamente em duas cópias' : 'Salvo no banco local; faça um backup do arquivo')).catch(() => setStorageStatus('Não foi possível salvar. Exporte um backup e tente novamente.'));
+    setStorageStatus('Salvando localmente e sincronizando…');
+    void saveFinanceState(user.id, state).then(({ backupSaved }) => {
+      if (!backupSaved) setStorageStatus('Salvo neste dispositivo; crie um backup externo.');
+    }).catch(() => setStorageStatus('Não foi possível salvar neste dispositivo.'));
+    void saveCloudFinanceState(user.id, state, revisionRef.current).then((saved) => {
+      revisionRef.current = saved.revision;
+      setStorageStatus(`Sincronizado na nuvem às ${new Intl.DateTimeFormat('pt-BR', { timeStyle: 'short' }).format(new Date(saved.updatedAt))}`);
+    }).catch(async (error) => {
+      if (error instanceof CloudConflictError) {
+        revisionRef.current = error.remote.revision;
+        setFinance(error.remote.state);
+        await saveFinanceState(user.id, error.remote.state);
+        setStorageStatus('Dados atualizados por outro dispositivo para evitar perda de informações.');
+      } else setStorageStatus('Alteração salva localmente e aguardando conexão com a nuvem.');
+    });
   };
 
   useEffect(() => {
@@ -131,19 +173,31 @@ export default function HomePage() {
         const item: FinanceTransaction = { id: crypto.randomUUID(), description: data.descricao, amount: data.valor, type: data.tipo, category: data.categoria, date: data.data, createdAt: new Date().toISOString(), source: 'manual', status: data.tipo === 'expense' && data.data > new Date().toISOString().slice(0, 10) ? 'planned' : 'paid' };
         setFinance((current) => {
           const next = { ...current, transactions: [item, ...current.transactions], updatedAt: new Date().toISOString() };
-          void saveFinanceState(next);
+          void saveFinanceState(user.id, next);
           return next;
         });
         return { ok: true, id: item.id };
       },
     }, { signal: controller.signal });
     return () => controller.abort();
-  }, []);
+  }, [user.id]);
+
+  useEffect(() => {
+    const channel = watchCloudFinanceState(user.id, (remote) => {
+      if (remote.revision <= (revisionRef.current ?? 0)) return;
+      revisionRef.current = remote.revision;
+      setFinance(remote.state);
+      void saveFinanceState(user.id, remote.state);
+      setStorageStatus('Dados atualizados por outro dispositivo.');
+    });
+    return () => { void channel.unsubscribe(); };
+  }, [user.id]);
 
   const monthTransactions = useMemo(() => finance.transactions.filter((item) => item.date.startsWith(selectedMonth)), [finance.transactions, selectedMonth]);
   const monthTotals = useMemo(() => totals(monthTransactions), [monthTransactions]);
   const previousMonthTotals = useMemo(() => totals(finance.transactions.filter((item) => item.date.startsWith(shiftMonth(selectedMonth, -1)))), [finance.transactions, selectedMonth]);
-  const available = monthTotals.income - monthTotals.expense;
+  const carryOver = useMemo(() => calculateCarryOver(finance.transactions, selectedMonth), [finance.transactions, selectedMonth]);
+  const available = carryOver + monthTotals.income - monthTotals.expense;
   const expenseChange = previousMonthTotals.expense ? ((monthTotals.expense - previousMonthTotals.expense) / previousMonthTotals.expense) * 100 : 0;
   const selectedYear = Number(selectedMonth.slice(0, 4));
 
@@ -274,6 +328,40 @@ export default function HomePage() {
     persist({ ...finance, budgets });
   };
 
+  const importLegacyData = async () => {
+    setStorageStatus('Associando os dados locais à sua conta…');
+    try {
+      await claimAndSaveLegacyState(user.id, finance);
+      const saved = await saveCloudFinanceState(user.id, finance, revisionRef.current);
+      revisionRef.current = saved.revision;
+      setLegacyImportAvailable(false);
+      setStorageStatus('Dados locais importados e sincronizados com sua conta.');
+    } catch (error) {
+      if (error instanceof CloudConflictError) {
+        revisionRef.current = error.remote.revision;
+        setFinance(error.remote.state);
+        await saveFinanceState(user.id, error.remote.state);
+        setLegacyImportAvailable(false);
+        setStorageStatus('Encontramos uma cópia em nuvem e a mantivemos para evitar duplicidades.');
+      } else setStorageStatus('Não foi possível concluir a importação. Seus dados locais continuam intactos.');
+    }
+  };
+
+  const keepLegacyOnly = () => {
+    protectLegacyDataForUser(user.id);
+    setLegacyImportAvailable(false);
+    setStorageStatus('Os dados locais foram mantidos neste aparelho e não serão mostrados a outra conta.');
+  };
+
+  const handleSignOut = async () => {
+    try { await signOut(); } catch { setStorageStatus('Não foi possível encerrar a sessão agora.'); }
+  };
+
+  const removeAccount = async () => {
+    if (!window.confirm('Excluir sua conta remove definitivamente os dados financeiros sincronizados. Esta ação não pode ser desfeita.')) return;
+    try { await deleteAccount(); } catch { setStorageStatus('Não foi possível excluir a conta. Tente novamente.'); }
+  };
+
   const exportCsv = () => {
     const rows = [['Data', 'Descrição', 'Tipo', 'Categoria', 'Valor', 'Situação', 'Recorrência'], ...finance.transactions.map((item) => [item.date, item.description, item.type === 'income' ? 'Receita' : 'Despesa', item.category, item.amount.toFixed(2).replace('.', ','), item.status === 'planned' ? 'A vencer' : 'Pago/recebido', item.recurrenceTotal ? `${item.recurrenceIndex}/${item.recurrenceTotal}` : 'Não'])];
     const csv = rows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(';')).join('\n');
@@ -332,7 +420,7 @@ export default function HomePage() {
 
     if (activeView === 'reports') { const yearly = Array.from({ length: 12 }, (_, index) => { const key = `${selectedYear}-${String(index + 1).padStart(2, '0')}`; return { month: shortMonthFormatter.format(new Date(selectedYear, index, 1)), ...totals(finance.transactions.filter((item) => item.date.startsWith(key))) }; }); const yearTotals = totals(finance.transactions.filter((item) => item.date.startsWith(String(selectedYear)))); return <section className="workspace-view"><div className="view-heading"><div><span>Resumo e exportação</span><h1>Relatórios</h1><p>Confira o realizado e o previsto de {selectedYear}, com exportação completa para planilha CSV.</p></div><Button variant="outline" onClick={exportCsv} disabled={!finance.transactions.length}><Download /> Baixar CSV</Button></div><div className="report-summary"><article className="panel"><span>Receitas recebidas</span><strong className="amount-positive">{money.format(yearTotals.income)}</strong></article><article className="panel"><span>Despesas pagas</span><strong>{money.format(yearTotals.expense)}</strong></article><article className="panel"><span>Despesas a vencer</span><strong className="amount-planned">{money.format(yearTotals.plannedExpense)}</strong></article><article className="panel"><span>Resultado projetado</span><strong className={yearTotals.income - yearTotals.expense - yearTotals.plannedExpense >= 0 ? 'amount-positive' : 'amount-negative'}>{money.format(yearTotals.income - yearTotals.expense - yearTotals.plannedExpense)}</strong></article></div><div className="panel report-table"><div className="panel-header"><div><h2>Mês a mês</h2><p>Valores calculados a partir dos lançamentos reais e agendados</p></div></div><div className="table-head report-five"><span>Mês</span><span>Receitas</span><span>Pagas</span><span>A vencer</span><span>Projetado</span></div>{yearly.map((row) => <div className="table-row report-five" key={row.month}><strong>{row.month}</strong><span>{money.format(row.income)}</span><span>{money.format(row.expense)}</span><span className="amount-planned">{money.format(row.plannedExpense)}</span><b className={row.income - row.expense - row.plannedExpense >= 0 ? 'amount-positive' : 'amount-negative'}>{money.format(row.income - row.expense - row.plannedExpense)}</b></div>)}</div></section>; }
 
-    return <section className="workspace-view"><div className="view-heading"><div><span>Dados e preferências</span><h1>Configurações</h1><p>Proteja, exporte ou restaure as informações guardadas neste aparelho.</p></div></div><div className="settings-grid"><article className="panel settings-card"><span><Database /></span><div><h2>Salvamento automático</h2><p>{storageStatus}. A cópia principal usa o banco local do navegador.</p></div><b>Ativo</b></article><article className="panel settings-card"><span><Download /></span><div><h2>Baixar backup</h2><p>Guarde uma cópia fora do navegador antes de trocar ou formatar o aparelho.</p></div><Button onClick={exportBackup}>Baixar</Button></article><article className="panel settings-card"><span><Upload /></span><div><h2>Restaurar backup</h2><p>Selecione um arquivo JSON criado anteriormente pelo Clarofin.</p></div><Button variant="outline" onClick={() => setBackupOpen(true)}>Abrir restauração</Button></article><article className="panel settings-card"><span><ShieldCheck /></span><div><h2>Próxima etapa: conta segura</h2><p>O login com sincronização em nuvem será adicionado depois, mantendo o modo local disponível.</p></div><b>Planejado</b></article></div></section>;
+    return <section className="workspace-view"><div className="view-heading"><div><span>Dados e preferências</span><h1>Configurações</h1><p>Gerencie sua conta privada, backups e sincronização confirmada.</p></div></div><div className="settings-grid"><article className="panel settings-card"><span><Database /></span><div><h2>Sincronização automática</h2><p>{storageStatus}. O cache deste navegador é separado por conta.</p></div><b>Ativa</b></article><article className="panel settings-card"><span><Download /></span><div><h2>Baixar backup</h2><p>Guarde uma cópia fora do navegador antes de trocar ou formatar o aparelho.</p></div><Button onClick={exportBackup}>Baixar</Button></article><article className="panel settings-card"><span><Upload /></span><div><h2>Restaurar backup</h2><p>Selecione um arquivo JSON criado anteriormente pelo Clarofin.</p></div><Button variant="outline" onClick={() => setBackupOpen(true)}>Abrir restauração</Button></article><article className="panel settings-card"><span><ShieldCheck /></span><div><h2>Sua conta</h2><p>{user.email || 'E-mail não disponível'}</p></div><Button variant="outline" onClick={() => void handleSignOut()}>Sair</Button></article><article className="panel settings-card danger-settings"><span><Trash2 /></span><div><h2>Excluir conta</h2><p>Remove seus dados financeiros sincronizados de forma definitiva.</p></div><Button variant="outline" onClick={() => void removeAccount()}>Excluir</Button></article></div></section>;
   };
 
   return (
@@ -361,7 +449,7 @@ export default function HomePage() {
         <header className="topbar">
           <div className="mobile-brand-row"><button className="icon-button menu-button" onClick={() => setMobileMenu(true)} aria-label="Abrir menu"><Menu /></button><div className="brand compact"><span className="brand-mark"><TrendingUp /></span><span>claro</span><b>fin</b></div></div>
           <div className="month-controller"><button className="month-arrow" onClick={() => setSelectedMonth(shiftMonth(selectedMonth, -1))} aria-label="Mês anterior"><ChevronLeft /></button><label><span>Mês de referência</span><input type="month" value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)} /></label><button className="month-arrow" onClick={() => setSelectedMonth(shiftMonth(selectedMonth, 1))} aria-label="Próximo mês"><ChevronRight /></button></div>
-          <div className="top-actions"><button className="icon-button notification" onClick={() => navigate('accounts')} aria-label={`Abrir ${pendingCount} alertas`}><Bell />{pendingCount > 0 && <span>{pendingCount}</span>}</button><Button variant="outline" className="backup-button" onClick={() => setBackupOpen(true)}><ShieldCheck /> Backup</Button><Button className="add-button" onClick={openTransaction}><Plus /> Novo lançamento</Button></div>
+          <div className="top-actions"><span className="session-user" title={user.email || 'Usuário Clarofin'}>{String(user.user_metadata.full_name || user.user_metadata.name || user.email || 'Usuário')}</span><button className="icon-button notification" onClick={() => navigate('accounts')} aria-label={`Abrir ${pendingCount} alertas`}><Bell />{pendingCount > 0 && <span>{pendingCount}</span>}</button><Button variant="outline" className="backup-button" onClick={() => setBackupOpen(true)}><ShieldCheck /> Backup</Button><Button className="add-button" onClick={openTransaction}><Plus /> Novo lançamento</Button><button className="icon-button signout-button" onClick={() => void handleSignOut()} aria-label="Sair da conta"><LogOut /></button></div>
         </header>
 
         <div className="dashboard">
@@ -371,7 +459,7 @@ export default function HomePage() {
           <section className="mobile-month-controller" aria-label="Selecionar mês"><button onClick={() => setSelectedMonth(shiftMonth(selectedMonth, -1))} aria-label="Mês anterior"><ChevronLeft /></button><label><span>Mês de referência</span><input type="month" value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)} /></label><button onClick={() => setSelectedMonth(shiftMonth(selectedMonth, 1))} aria-label="Próximo mês"><ChevronRight /></button></section>
 
           <section className="summary-grid" aria-label={`Resumo de ${monthLabel}`}>
-            <article className="summary-card balance-card"><div className="card-heading"><span>Resultado do mês</span><button onClick={() => setBalanceVisible(!balanceVisible)} aria-label="Mostrar ou esconder valores">{balanceVisible ? <Eye /> : <EyeOff />}</button></div><strong>{balanceVisible ? money.format(available) : '••••••'}</strong><p><span className={available >= 0 ? 'positive-pill' : 'negative-pill'}>{available >= 0 ? <ArrowUpRight /> : <ArrowDownLeft />}{available >= 0 ? 'Saldo positivo' : 'Saldo devedor'}</span></p><div className="balance-glow" /></article>
+            <article className="summary-card balance-card"><div className="card-heading"><span>Saldo acumulado</span><button onClick={() => setBalanceVisible(!balanceVisible)} aria-label="Mostrar ou esconder valores">{balanceVisible ? <Eye /> : <EyeOff />}</button></div><strong>{balanceVisible ? money.format(available) : '••••••'}</strong><p><span className={available >= 0 ? 'positive-pill' : 'negative-pill'}>{available >= 0 ? <ArrowUpRight /> : <ArrowDownLeft />}{available >= 0 ? 'Saldo positivo' : 'Saldo devedor'}</span><small className="carry-over">Inclui {money.format(carryOver)} do mês anterior</small></p><div className="balance-glow" /></article>
             <article className="summary-card"><div className="card-heading"><span>Receitas</span><span className="metric-icon income"><ArrowDownLeft /></span></div><strong>{money.format(monthTotals.income)}</strong><p>{monthTransactions.filter((item) => item.type === 'income').length} entradas registradas</p></article>
             <article className="summary-card"><div className="card-heading"><span>Despesas</span><span className="metric-icon expense"><ArrowUpRight /></span></div><strong>{money.format(monthTotals.expense)}</strong><p>{expenseChange === 0 ? 'Sem comparação anterior' : `${Math.abs(expenseChange).toFixed(0)}% ${expenseChange > 0 ? 'acima' : 'abaixo'} do mês anterior`}</p></article>
             <article className="summary-card safe-card"><div className="card-heading"><span>Despesas a vencer</span><span className="metric-icon safe"><CalendarDays /></span></div><strong>{money.format(monthTotals.plannedExpense)}</strong><p><span className="status-dot" /> {monthTransactions.filter((item) => item.type === 'expense' && item.status === 'planned').length} compromissos neste mês</p></article>
@@ -404,7 +492,7 @@ export default function HomePage() {
 
             <article className="panel alerts-panel"><div className="panel-header"><div><h2>Contas importantes</h2><p>{pendingCount ? `${pendingCount} precisam de atenção` : 'Tudo em dia'}</p></div><Bell /></div><div className="alerts-list">{pendingBills.slice(0, 5).map((item) => { const overdue = item.dueDate < todayKey; return <div className={`alert-row ${overdue ? 'danger' : 'warning'}`} key={`${item.kind}-${item.id}`}><span className="alert-icon">{overdue ? <AlertCircle /> : <Bell />}</span><div className="alert-copy"><strong>{item.title}</strong><span>{overdue ? 'Vencida' : 'Vence'} em {new Intl.DateTimeFormat('pt-BR').format(new Date(`${item.dueDate}T12:00:00`))} · {money.format(item.amount)}{item.recurringLabel ? ` · ${item.recurringLabel}` : ''}</span></div><button onClick={() => item.kind === 'transaction' ? markTransactionPaid(item.id) : markPaid(item.id)}><Check /> Paguei</button></div>; })}{!pendingCount && <div className="all-good"><span><Check /></span><strong>Contas em dia</strong><p>Nenhum pagamento pendente.</p></div>}</div></article>
 
-            <article className="panel protection-panel"><div className="panel-header"><div><h2>Proteção dos dados</h2><p>Salvamento local nesta etapa</p></div><span className="storage-ok"><ShieldCheck /> Ativo</span></div><div className="protection-body"><div><span><Database /></span><p><strong>IndexedDB</strong><small>Cópia principal no navegador</small></p><Check /></div><div><span><RefreshCcw /></span><p><strong>Cópia automática</strong><small>Recuperação local redundante</small></p><Check /></div><button onClick={() => setBackupOpen(true)}><Download /> Criar backup para guardar</button><p className="storage-warning">Limpar os dados do navegador remove as cópias locais. Guarde um backup regularmente.</p></div></article>
+            <article className="panel protection-panel"><div className="panel-header"><div><h2>Proteção dos dados</h2><p>Sincronização privada por conta</p></div><span className="storage-ok"><ShieldCheck /> Ativo</span></div><div className="protection-body"><div><span><Database /></span><p><strong>Cache privado</strong><small>Separado para esta conta neste navegador</small></p><Check /></div><div><span><RefreshCcw /></span><p><strong>Nuvem confirmada</strong><small>{storageStatus}</small></p><Check /></div><button onClick={() => setBackupOpen(true)}><Download /> Criar backup para guardar</button><p className="storage-warning">O backup continua sendo a sua cópia independente de recuperação.</p></div></article>
           </section>
           </> : renderSecondaryView()}
         </div>
@@ -432,6 +520,10 @@ export default function HomePage() {
       <Dialog open={backupOpen} onOpenChange={setBackupOpen}>
         <DialogContent className="backup-dialog"><DialogHeader><span className="dialog-kicker"><ShieldCheck /> Proteção local</span><DialogTitle>Backup dos seus dados</DialogTitle><DialogDescription>Baixe uma cópia para guardar fora do navegador ou restaure um arquivo criado anteriormente.</DialogDescription></DialogHeader><div className="backup-options"><button onClick={exportBackup}><span className="backup-option-icon download"><Download /></span><div><strong>Baixar backup</strong><small>Salva receitas, despesas e alertas em um arquivo</small></div><ArrowRight /></button><button onClick={() => backupInputRef.current?.click()}><span className="backup-option-icon upload"><Upload /></span><div><strong>Restaurar backup</strong><small>Substitui os dados locais após sua confirmação</small></div><ArrowRight /></button><input ref={backupInputRef} type="file" accept="application/json,.json" onChange={(event) => void importBackup(event.target.files?.[0])} /></div><div className="backup-status"><Database /><span><strong>{storageStatus}</strong><small>Última alteração: {new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(finance.updatedAt))}</small></span></div></DialogContent>
       </Dialog>
+      <Dialog open={legacyImportAvailable}>
+        <DialogContent className="backup-dialog"><DialogHeader><span className="dialog-kicker"><Database /> Migração segura</span><DialogTitle>Encontramos dados neste dispositivo</DialogTitle><DialogDescription>Há {finance.transactions.length} lançamentos, {finance.accounts.length} contas, {finance.goals.length} metas e {finance.budgets.length} orçamentos locais. Eles só serão associados à conta {user.email || 'atual'} após sua confirmação.</DialogDescription></DialogHeader><div className="backup-options"><button onClick={() => void importLegacyData()}><span className="backup-option-icon download"><Upload /></span><div><strong>Importar para minha conta</strong><small>Cria uma cópia sincronizada e preserva os dados locais</small></div><ArrowRight /></button><button onClick={keepLegacyOnly}><span className="backup-option-icon upload"><ShieldCheck /></span><div><strong>Manter somente neste dispositivo</strong><small>Não envia nada para a nuvem e protege esses dados de outra conta</small></div><ArrowRight /></button></div></DialogContent>
+      </Dialog>
     </div>
   );
 }
+

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { calculateTotals, shiftRecurringDate } from '../lib/finance-calculations.ts';
+import { calculateCarryOver, calculateTotals, shiftRecurringDate } from '../lib/finance-calculations.ts';
 import type { FinanceTransaction } from '../lib/finance-store.ts';
 
 const base = {
@@ -20,6 +20,13 @@ assert.deepEqual(result, { income: 5000, expense: 1250.5, plannedExpense: 499.5 
 assert.equal(result.income - result.expense, 3749.5, 'Saldo atual incorreto');
 assert.equal(result.income - result.expense - result.plannedExpense, 3250, 'Saldo projetado incorreto');
 
+const carryOver = calculateCarryOver([
+  { ...base, id: 'aug-income', description: 'Agosto', amount: 2000, type: 'income', status: 'paid', date: '2026-08-20' },
+  { ...base, id: 'aug-expense', description: 'Agosto', amount: 650, type: 'expense', status: 'paid', date: '2026-08-21' },
+  { ...base, id: 'future', description: 'Prevista', amount: 400, type: 'expense', status: 'planned', date: '2026-08-25' },
+], '2026-09');
+assert.equal(carryOver, 1350, 'O saldo residual do mês anterior deve considerar apenas valores realizados');
+
 assert.equal(shiftRecurringDate('2027-01-31', 1), '2027-02-28');
 assert.equal(shiftRecurringDate('2028-01-31', 1), '2028-02-29');
 assert.equal(shiftRecurringDate('2026-03-31', 1), '2026-04-30');
@@ -31,3 +38,4 @@ assert.equal(twelveMonths[0], '2026-09-30');
 assert.equal(twelveMonths[11], '2027-08-30');
 
 console.log('Cálculos financeiros e recorrências verificados com sucesso.');
+

@@ -1,4 +1,4 @@
-# Clarofin — Parte 4
+# Clarofin 2.0 — Cloud Edition
 
 Plataforma de administração financeira pessoal com visual de aplicativo, linguagem clara e foco em adolescentes, adultos e idosos.
 
@@ -28,13 +28,27 @@ Plataforma de administração financeira pessoal com visual de aplicativo, lingu
 - relatório anual mês a mês e exportação CSV;
 - início limpo, sem valores financeiros demonstrativos.
 
-## Segurança dos dados nesta etapa
+## Nuvem, privacidade e continuidade
 
-Os dados ficam somente no aparelho do usuário. O IndexedDB mantém a cópia principal e o armazenamento local mantém uma segunda cópia de recuperação quando há espaço disponível. O usuário também pode baixar um arquivo de backup.
+Cada pessoa usa uma conta própria do Supabase. O aplicativo oferece cadastro com e-mail e senha, confirmação de e-mail, recuperação de senha, sessão persistente, saída e exclusão definitiva de conta. A exclusão só é executada por uma Edge Function autenticada; a credencial administrativa nunca chega ao navegador.
 
-Limpar os dados do navegador ou perder o aparelho ainda pode apagar as cópias locais. Por isso, o painel recomenda backups periódicos. A próxima evolução planejada é login com sincronização segura, podendo usar Firebase Authentication e Firestore.
+Os dados financeiros são sincronizados para o projeto exclusivo `Clarofin Cloud Edition`, com RLS em todas as tabelas. A política de cada tabela exige `(select auth.uid()) = user_id`, inclusive em `UPDATE` e `WITH CHECK`. Dados de outra conta não são carregados do cache local.
 
-Ao abrir a Parte 4 pela primeira vez, os dados reais das versões anteriores são migrados e preservados. Despesas futuras antigas também passam a ser reconhecidas automaticamente como contas a vencer.
+No primeiro acesso, o Clarofin detecta os dados locais existentes, mostra a quantidade encontrada e pede confirmação antes de vinculá-los à conta. O original permanece no navegador. Os valores são normalizados em centavos antes do salvamento e o saldo acumulado considera o resultado realizado dos meses anteriores, sem descontar despesas apenas planejadas.
+
+O IndexedDB continua como cache/offline da conta atual e o backup JSON continua disponível. Limpar dados do navegador pode remover esse cache; mantenha um backup externo.
+
+## Configuração única do Google OAuth
+
+O projeto Supabase já criado para o Clarofin é `nnjoqwvowdokzofsztxy`. Esta única configuração manual é necessária porque o Google Client Secret não pode ser exposto a um agente, ao navegador ou ao GitHub:
+
+1. No [Google Cloud Console](https://console.cloud.google.com/), crie ou selecione um projeto e crie um cliente OAuth 2.0 do tipo **Aplicativo da Web**.
+2. Em **Authorized JavaScript origins**, inclua `https://jonatanoficial-bit.github.io`.
+3. Em **Authorized redirect URIs**, inclua `https://nnjoqwvowdokzofsztxy.supabase.co/auth/v1/callback`.
+4. No painel do novo projeto Supabase, abra **Authentication → URL Configuration** e defina a Site URL como `https://jonatanoficial-bit.github.io/Clarofin/`. Adicione a mesma URL à lista de Redirect URLs.
+5. Em **Authentication → Providers → Google**, habilite o provedor e informe o Client ID e o Client Secret criados no Google Cloud. Mantenha os escopos em `openid`, `email` e `profile`.
+
+Não use nem publique uma `service_role`, senha de banco ou Client Secret. A chave publicável no cliente é própria para aplicações estáticas e não concede acesso fora das políticas RLS.
 
 ## Rodar localmente
 
@@ -72,9 +86,9 @@ Os arquivos prontos ficam em `dist/client`.
 
 O projeto inclui `.github/workflows/deploy-pages.yml`. Nas configurações do repositório, escolha **Settings → Pages → Source → GitHub Actions**. Cada envio para a branch `main` fará uma nova publicação.
 
-## Próximas etapas
+## Banco e rollback
 
-1. login e sincronização em nuvem com Firebase;
-2. OCR/IA para extrair valor, data e estabelecimento da foto;
-3. notificações no celular e recursos premium;
-4. edição em lote de séries recorrentes.
+- Migração: `supabase/migrations/20261127190000_clarofin_cloud_initial.sql`.
+- Edge Function de exclusão: `supabase/functions/clarofin-delete-account/index.ts`.
+- Para rollback de código, reverta o commit ou retorne à branch anterior. A migração cria apenas objetos com prefixo `clarofin_` no projeto exclusivo; não altera qualquer outro projeto Supabase.
+

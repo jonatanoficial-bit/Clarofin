@@ -21,3 +21,11 @@ export function calculateTotals(items: FinanceTransaction[]): FinanceTotals {
     return result;
   }, { income: 0, expense: 0, plannedExpense: 0 });
 }
+
+/** Saldo consolidado antes do primeiro dia do mês selecionado. */
+export function calculateCarryOver(items: FinanceTransaction[], month: string): number {
+  return items
+    .filter((item) => item.date < `${month}-01` && item.status === 'paid')
+    .reduce((balance, item) => balance + (item.type === 'income' ? item.amount : -item.amount), 0);
+}
+
